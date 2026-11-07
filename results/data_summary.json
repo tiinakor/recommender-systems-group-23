@@ -1,0 +1,35 @@
+{
+  "n_ratings": 1000209,
+  "n_users": 6040,
+  "n_movies_in_catalogue": 3883,
+  "n_movies_rated": 3706,
+  "density_rated_movies": 0.044683625622312845,
+  "ratings_per_user_median": 96.0,
+  "ratings_per_user_min": 20,
+  "ratings_per_user_max": 2314,
+  "ratings_per_item_median": 123.5,
+  "ratings_per_item_max": 3428,
+  "items_with_under_10_ratings": 446,
+  "ratings_share_of_top_10pct_items": 0.4438112434501189,
+  "rating_share": {
+    "1": 0.05616226208722377,
+    "2": 0.1075345252842156,
+    "3": 0.2611424212339621,
+    "4": 0.34889808030121705,
+    "5": 0.22626271109338147
+  },
+  "ratings_share_by_year": {
+    "2000": 0.9045679452994324,
+    "2001": 0.06804377885022031,
+    "2002": 0.024040975436133847,
+    "2003": 0.0033473004142134293
+  },
+  "user_active_days_median": 0.04708912037037037,
+  "share_of_users_active_within_1_day": 0.6293046357615895,
+  "global_cut_check": {
+    "train_fraction": 0.8,
+    "cutoff": "2000-12-02 14:52:18+00:00",
+    "n_test_users": 1783,
+    "share_of_test_users_seen_in_train": 0.641054402692092
+  }
+}
