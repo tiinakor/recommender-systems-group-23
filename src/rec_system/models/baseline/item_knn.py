@@ -2,7 +2,7 @@ import numpy as np
 from sklearn.neighbors import NearestNeighbors
 
 
-def fit_item_knn(user_item_matrix, k=30, metric="cosine"):
+def fit_item_knn(user_item_matrix, k=3, metric="cosine"):
     """Fit Item-KNN and precompute item neighbours."""
 
     item_user_matrix = user_item_matrix.T.astype(float)
