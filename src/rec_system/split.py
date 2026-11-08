@@ -19,14 +19,15 @@ def split_ratings(ratings):
     ].copy()
     test = ratings[ratings["timestamp"] > val_cutoff].copy()
 
-    # Remove users without training history
+    # remove test users with no history in train or validation
     train_users = set(train["user_id"].unique())
+    val_users = set(validation["user_id"].unique())     # validation rows kept (training data for final refit) 
+    known_by_test = train_users | val_users
 
-    val_new_users = set(validation["user_id"].unique()) - train_users
-    test_new_users = set(test["user_id"].unique()) - train_users
+    val_new_users = val_users - train_users
+    test_new_users = set(test["user_id"].unique()) - known_by_test
 
-    validation = validation[validation["user_id"].isin(train_users)].copy()
-    test = test[test["user_id"].isin(train_users)].copy()
+    test = test[test["user_id"].isin(known_by_test)].copy()
 
     # Print split statistics
     print("\nGlobal chronological split")
