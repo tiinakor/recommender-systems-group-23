@@ -1,0 +1,5 @@
+{
+  "k": 20,
+  "metric": "cosine",
+  "aggregation": "sum"
+}
