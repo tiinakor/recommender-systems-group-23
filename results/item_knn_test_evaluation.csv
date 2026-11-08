@@ -1,0 +1,2 @@
+precision@10,recall@10,ndcg@10,coverage,n_users_evaluated,n_users_in_held_out,n_users_without_recommendations,model
+0.20964685615848408,0.05785410165584247,0.2289241306370881,0.08445763626551538,1161,1187,0,item_knn
