@@ -7,13 +7,13 @@ Conventions:
     2. Relevance: a held-out item is relevant if its rating >= 4. Other items, including ones that never rated, is not relevant
     3. Users: only users with at least 1 relevant held-out item are scored. A scored user with no rec list gets 0, not skipped
     4. Averaging: metrics are computed per user, then averaged with equal weight per user
-    
+
 A recommendation list is a sequence of items id, best first; relevant and seen items are sets of item ids
 """
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -42,14 +42,14 @@ def seen_items(train: pd.DataFrame) -> dict[int, set[int]]:
 def top_k_unseen(scores: np.ndarray, item_ids: Sequence[int], seen: Collection[int]=(), k: int=DEFAULT_K) -> list[int]:
     """return the ids of k highest-scoring items the user has not seen"""
     scores = np.asarray(scores, dtype=float).copy()         # copy -> dont change the model's array
-    items_id = np.asarray(items_id)
+    item_ids = np.asarray(item_ids)
     if seen:
-        scores[np.isin(items_id, list(seen))] = -np.inf
+        scores[np.isin(item_ids, list(seen))] = -np.inf
     k = min(k, int(np.isfinite(scores).sum()))              # cant returnn more that what's left
     if k <= 0:
         return []
     order = np.argsort(-scores, kind="stable")[:k]
-    return [int(i) for i in items_id[order]]
+    return [int(i) for i in item_ids[order]]
 
 
 # --- per-list metrics ---
@@ -72,8 +72,6 @@ def recall_at_k(ranked: Sequence[int], relevant: Collection[int], k: int) -> flo
 def ndcg_at_k(ranked: Sequence[int], relevant: Collection[int], k: int) -> float:
     """each hit at rank r is worth: 1 / log2(r+1)
     a hit near the top is worth more than one near the bottom"""
-    if not relevant:
-        return float("nan")
     if not relevant:
         return float("nan")
     dcg = sum(
@@ -126,3 +124,33 @@ def per_user_metrics(
         )
     columns = ["user_id", "n_relevant", f"precision@{k}", f"recall@{k}", f"ndcg@{k}"]
     return pd.DataFrame(rows, columns=columns).sort_values("user_id", ignore_index=True)
+
+
+def evaluate(
+    recommendations: Mapping[int, Sequence[int]],
+    held_out: pd.DataFrame,
+    n_catalogue_items: int,
+    k: int = DEFAULT_K,
+    threshold: float = DEFAULT_THRESHOLD,
+) -> tuple[dict[str, float], pd.DataFrame]:
+    """score a set of top-k lists against a held-out split.
+ 
+    returns ``(summary, per_user)``. ``summary`` holds the mean of each
+    per-user metric, catalogue coverage, and the user counts needed to report
+    the protocol honestly.
+    """
+    relevant = relevant_items(held_out, threshold)
+    per_user = per_user_metrics(recommendations, relevant, k)
+    summary = {
+        f"precision@{k}": float(per_user[f"precision@{k}"].mean()),
+        f"recall@{k}": float(per_user[f"recall@{k}"].mean()),
+        f"ndcg@{k}": float(per_user[f"ndcg@{k}"].mean()),
+        "coverage": catalogue_coverage(recommendations, n_catalogue_items, k),
+        "n_users_evaluated": len(per_user),
+        "n_users_in_held_out": int(held_out["user_id"].nunique()),
+        "n_users_without_recommendations": int(
+            sum(1 for u in relevant if not recommendations.get(u))
+        ),
+    }
+    return summary, per_user
+ 
