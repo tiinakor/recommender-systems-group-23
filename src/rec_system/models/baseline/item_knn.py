@@ -1,110 +1,120 @@
 import numpy as np
-from sklearn.neighbors import NearestNeighbors
+import pandas as pd
+
+SIMILARITIES = ("cosine", "adjusted_cosine", "jaccard")
+AGGREGATIONS = ("sum", "average")
 
 
-def fit_item_knn(user_item_matrix, k=3, metric="cosine"):
-    """Fit Item-KNN and precompute item neighbours."""
+def item_similarity(
+    user_item_matrix: pd.DataFrame, metric: str = "cosine"
+) -> np.ndarray:
+    """Item-by-item similarity matrix, with each item's similarity to itself set to 0."""
+    ratings = user_item_matrix.to_numpy(dtype=float)
+    rated = ratings > 0
 
-    item_user_matrix = user_item_matrix.T.astype(float)
+    if metric == "jaccard":
+        binary = rated.astype(float)
+        overlap = binary.T @ binary
+        counts = binary.sum(axis=0)
+        union = counts[:, None] + counts[None, :] - overlap
+        similarity = np.divide(
+            overlap, union, out=np.zeros_like(overlap), where=union > 0
+        )
+    elif metric in ("cosine", "adjusted_cosine"):
+        if metric == "adjusted_cosine":
+            # Subtract each user's mean rating from the ratings they gave (slide 6)
+            user_means = ratings.sum(axis=1, keepdims=True) / np.maximum(
+                rated.sum(axis=1, keepdims=True), 1
+            )
+            ratings = np.where(rated, ratings - user_means, 0.0)
+        norms = np.linalg.norm(ratings, axis=0)
+        denominator = np.outer(norms, norms)
+        similarity = np.divide(
+            ratings.T @ ratings,
+            denominator,
+            out=np.zeros((len(norms), len(norms))),
+            where=denominator > 0,
+        )
+    else:
+        raise ValueError(f"metric must be one of {SIMILARITIES}, got {metric!r}")
 
-    n_neighbors = min(k + 1, len(item_user_matrix))
+    np.fill_diagonal(similarity, 0.0)
+    return similarity
 
-    model = NearestNeighbors(
-        n_neighbors=n_neighbors,
-        metric=metric,
-        algorithm="brute",
-        n_jobs=-1
-    )
 
-    model.fit(item_user_matrix)
-
-    distances, indices = model.kneighbors(item_user_matrix)
+def fit_item_knn(
+    user_item_matrix: pd.DataFrame,
+    k: int = 30,
+    metric: str = "cosine",
+    aggregation: str = "sum",
+) -> dict:
+    """Precompute item similarities; neighbours are chosen per user at recommend time."""
+    if aggregation not in AGGREGATIONS:
+        raise ValueError(
+            f"aggregation must be one of {AGGREGATIONS}, got {aggregation!r}"
+        )
 
     return {
-        "model": model,
-        "distances": distances,
-        "indices": indices,
-        "item_user_matrix": item_user_matrix,
+        "similarity": item_similarity(user_item_matrix, metric),
+        "item_ids": user_item_matrix.columns.to_numpy(),
         "k": k,
-        "metric": metric
+        "metric": metric,
+        "aggregation": aggregation,
     }
 
 
-def recommend(model_data, user_item_matrix, user_id, n=10):
+def score_items(model_data: dict, user_ratings: np.ndarray) -> np.ndarray:
+    """Score every item for one user from their k most similar rated items.
+
+    Rated items and items with no positively similar rated neighbour get -inf.
     """
-    Generate top-n recommendations using Item-KNN.
-
-    Excludes training items and returns item IDs.
-    """
-
-    item_user_matrix = model_data["item_user_matrix"]
-
-    if user_id not in item_user_matrix.columns:
-        return []
-
-    ratings = item_user_matrix[user_id].to_numpy(dtype=float)
-
-    rated = np.flatnonzero(ratings > 0)
-
+    rated = np.flatnonzero(user_ratings > 0)
+    scores = np.full(len(user_ratings), -np.inf)
     if len(rated) == 0:
+        return scores
+
+    # Similarity of every candidate item to each item the user rated
+    similarities = model_data["similarity"][:, rated]
+    neighbour_ratings = np.broadcast_to(user_ratings[rated], similarities.shape)
+
+    # Keep the k rated items most similar to each candidate (slide 5, step 2)
+    k = model_data["k"]
+    if len(rated) > k:
+        top = np.argpartition(-similarities, k - 1, axis=1)[:, :k]
+        similarities = np.take_along_axis(similarities, top, axis=1)
+        neighbour_ratings = np.take_along_axis(neighbour_ratings, top, axis=1)
+
+    # Negative neighbours are dropped (slide 10)
+    similarities = np.clip(similarities, 0.0, None)
+    weighted = (similarities * neighbour_ratings).sum(axis=1)
+    total_similarity = similarities.sum(axis=1)
+
+    has_neighbour = total_similarity > 0
+    if model_data["aggregation"] == "sum":
+        scores[has_neighbour] = weighted[has_neighbour]
+    else:
+        scores[has_neighbour] = (
+            weighted[has_neighbour] / total_similarity[has_neighbour]
+        )
+
+    scores[rated] = -np.inf
+    return scores
+
+
+def recommend(
+    model_data: dict, user_item_matrix: pd.DataFrame, user_id: int, n: int = 10
+) -> list[int]:
+    """Top-n unseen item IDs for a user; an empty list for users with no ratings."""
+    if user_id not in user_item_matrix.index:
         return []
 
-    scores = np.zeros(len(item_user_matrix))
-    weights = np.zeros(len(item_user_matrix))
-
-    for item in rated:
-
-        neighbors = model_data["indices"][item]
-        distances = model_data["distances"][item]
-
-        mask = neighbors != item
-
-        neighbors = neighbors[mask][:model_data["k"]]
-        distances = distances[mask][:model_data["k"]]
-
-        if model_data["metric"] == "cosine":
-            similarities = 1 - distances
-        else:
-            similarities = 1 / (1 + distances)
-
-        mask = similarities > 0
-
-        neighbors = neighbors[mask]
-        similarities = similarities[mask]
-
-        np.add.at(
-            scores,
-            neighbors,
-            similarities * ratings[item]
-        )
-
-        np.add.at(
-            weights,
-            neighbors,
-            similarities
-        )
-
-    predictions = np.divide(
-        scores,
-        weights,
-        out=np.zeros_like(scores),
-        where=weights > 0
+    user_ratings = (
+        user_item_matrix.loc[user_id]
+        .reindex(model_data["item_ids"], fill_value=0)
+        .to_numpy(dtype=float)
     )
+    scores = score_items(model_data, user_ratings)
 
-    # Exclude items already rated in training
-    predictions[rated] = -np.inf
-
-    # Exclude items without a prediction
-    predictions[weights == 0] = -np.inf
-
-    # Rank candidate items
-    ranked = np.argsort(-predictions, kind="stable")
-
-    # Return item IDs
-    recommended_indices = ranked[
-        np.isfinite(predictions[ranked])
-    ][:n]
-
-    return item_user_matrix.index[
-        recommended_indices
-    ].tolist()
+    ranked = np.argsort(-scores, kind="stable")
+    ranked = ranked[np.isfinite(scores[ranked])][:n]
+    return model_data["item_ids"][ranked].tolist()

@@ -1,8 +1,20 @@
+"""Tune Item-KNN on the validation set only (Lecture 3.1, slide 10)."""
+
 import time
+from itertools import product
+
 import pandas as pd
 
-from rec_system.models.baseline.item_knn import fit_item_knn, recommend
 from rec_system.metrics import evaluate, relevant_items
+from rec_system.models.baseline.item_knn import (
+    AGGREGATIONS,
+    SIMILARITIES,
+    fit_item_knn,
+    recommend,
+)
+
+K_VALUES = (10, 20, 50, 100, 200)
+SELECTION_METRICS = ("ndcg", "recall", "precision")
 
 
 def tune_item_knn(
@@ -11,122 +23,92 @@ def tune_item_knn(
     n: int = 10,
     threshold: float = 4,
     n_catalogue_items: int | None = None,
-):
+    select_by: str = "ndcg",
+) -> tuple[pd.DataFrame, dict]:
     """
-    Tune Item-KNN hyperparameters using validation Recall@K.
+    Score every Item-KNN configuration on validation and pick the best by `select_by`@n.
 
-    Uses the shared evaluate() function to calculate:
-    Precision@K, Recall@K, NDCG@K and catalogue coverage.
+    Only validation users who also appear in training are scored: Item-KNN cannot
+    recommend to a user with no ratings, so the others would add a zero to every
+    configuration.
     """
-
-    k_values = [2, 3, 4, 6, 10]
-    distance_metrics = ["cosine", "euclidean"]
-
-    results = []
-
-    start_time = time.time()
-
-    configurations = [
-        (metric, k)
-        for metric in distance_metrics
-        for k in k_values
-    ]
+    if select_by not in SELECTION_METRICS:
+        raise ValueError(f"select_by must be one of {SELECTION_METRICS}")
 
     if n_catalogue_items is None:
         n_catalogue_items = train_matrix.shape[1]
 
-    validation_users = list(
-        relevant_items(validation_data, threshold).keys()
+    known_validation = validation_data[
+        validation_data["user_id"].isin(train_matrix.index)
+    ]
+    validation_users = list(relevant_items(known_validation, threshold))
+    n_excluded = len(relevant_items(validation_data, threshold)) - len(validation_users)
+
+    configurations = list(product(SIMILARITIES, K_VALUES, AGGREGATIONS))
+    print(
+        f"\nStarting Item-KNN tuning: {len(configurations)} configurations, "
+        f"{len(validation_users)} validation users "
+        f"({n_excluded} without training history excluded)"
     )
 
-    print("\nStarting Item-KNN hyperparameter tuning...")
+    results = []
+    start_time = time.time()
 
-    for i, (metric, k) in enumerate(configurations, start=1):
+    for i, (metric, k, aggregation) in enumerate(configurations, start=1):
+        model = fit_item_knn(train_matrix, k=k, metric=metric, aggregation=aggregation)
 
-        config_start = time.time()
+        recommendations = {
+            int(user_id): recommend(model, train_matrix, user_id, n=n)
+            for user_id in validation_users
+        }
 
-        print(
-            f"\n[{i}/{len(configurations)}] "
-            f"Training Item-KNN | k={k}, metric={metric}"
-        )
-
-        # Fit model
-        model = fit_item_knn(
-            train_matrix,
-            k=k,
-            metric=metric,
-        )
-
-        # Generate recommendations for validation users
-        recommendations = {}
-
-        for user_id in validation_users:
-            recommendations[int(user_id)] = recommend(
-                model,
-                train_matrix,
-                user_id,
-                n=n,
-            )
-
-        # Evaluate using shared metrics
         summary, _ = evaluate(
             recommendations=recommendations,
-            held_out=validation_data,
+            held_out=known_validation,
             n_catalogue_items=n_catalogue_items,
             k=n,
             threshold=threshold,
         )
 
-        score = summary[f"recall@{n}"]
-
-        results.append({
-            "k": k,
-            "metric": metric,
-            f"precision@{n}": summary[f"precision@{n}"],
-            f"recall@{n}": score,
-            f"ndcg@{n}": summary[f"ndcg@{n}"],
-            "coverage": summary["coverage"],
-        })
+        results.append(
+            {
+                "metric": metric,
+                "k": k,
+                "aggregation": aggregation,
+                f"precision@{n}": summary[f"precision@{n}"],
+                f"recall@{n}": summary[f"recall@{n}"],
+                f"ndcg@{n}": summary[f"ndcg@{n}"],
+                "coverage": summary["coverage"],
+                "n_users_evaluated": summary["n_users_evaluated"],
+                "n_users_excluded_without_history": n_excluded,
+            }
+        )
 
         elapsed = time.time() - start_time
         remaining = elapsed / i * (len(configurations) - i)
-
-        print(f"Recall@{n}: {score:.4f}")
-
         print(
-            f"Configuration time: "
-            f"{time.time() - config_start:.2f} seconds"
+            f"[{i}/{len(configurations)}] metric={metric}, k={k}, "
+            f"aggregation={aggregation} | {select_by}@{n}: "
+            f"{summary[f'{select_by}@{n}']:.4f} | "
+            f"~{remaining / 60:.1f} min left"
         )
 
-        print(
-            f"Estimated remaining: "
-            f"{remaining / 60:.2f} minutes"
-        )
-
-    # Sort configurations by validation Recall@K
+    # Stable sort keeps the grid order when two configurations tie
+    score_column = f"{select_by}@{n}"
     results_df = (
         pd.DataFrame(results)
-        .sort_values(
-            f"recall@{n}",
-            ascending=False,
-        )
+        .sort_values(score_column, ascending=False, kind="stable")
         .reset_index(drop=True)
     )
 
-    # Select best configuration
     best = results_df.iloc[0]
-
     best_params = {
         "k": int(best["k"]),
         "metric": str(best["metric"]),
+        "aggregation": str(best["aggregation"]),
     }
 
-    print("\nItem-KNN tuning completed.")
-    print(f"Best parameters: {best_params}")
-
-    print(
-        f"Best validation Recall@{n}: "
-        f"{best[f'recall@{n}']:.4f}"
-    )
+    print(f"\nBest parameters: {best_params}")
+    print(f"Best validation {score_column}: {best[score_column]:.4f}")
 
     return results_df, best_params
