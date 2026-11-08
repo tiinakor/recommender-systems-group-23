@@ -19,35 +19,27 @@ def tune_item_knn(
     Precision@K, Recall@K, NDCG@K and catalogue coverage.
     """
 
-    k_values = [2, 3, 4, 6, 10]
-    distance_metrics = ["cosine", "euclidean"]
+    k_values = [10, 20, 50, 100, 200]
+    distance_metrics = ["cosine", "adjusted_cosine", "jaccard"]
 
     results = []
 
     start_time = time.time()
 
-    configurations = [
-        (metric, k)
-        for metric in distance_metrics
-        for k in k_values
-    ]
+    configurations = [(metric, k) for metric in distance_metrics for k in k_values]
 
     if n_catalogue_items is None:
         n_catalogue_items = train_matrix.shape[1]
 
-    validation_users = list(
-        relevant_items(validation_data, threshold).keys()
-    )
+    validation_users = list(relevant_items(validation_data, threshold).keys())
 
     print("\nStarting Item-KNN hyperparameter tuning...")
 
     for i, (metric, k) in enumerate(configurations, start=1):
-
         config_start = time.time()
 
         print(
-            f"\n[{i}/{len(configurations)}] "
-            f"Training Item-KNN | k={k}, metric={metric}"
+            f"\n[{i}/{len(configurations)}] Training Item-KNN | k={k}, metric={metric}"
         )
 
         # Fit model
@@ -79,29 +71,25 @@ def tune_item_knn(
 
         score = summary[f"recall@{n}"]
 
-        results.append({
-            "k": k,
-            "metric": metric,
-            f"precision@{n}": summary[f"precision@{n}"],
-            f"recall@{n}": score,
-            f"ndcg@{n}": summary[f"ndcg@{n}"],
-            "coverage": summary["coverage"],
-        })
+        results.append(
+            {
+                "k": k,
+                "metric": metric,
+                f"precision@{n}": summary[f"precision@{n}"],
+                f"recall@{n}": score,
+                f"ndcg@{n}": summary[f"ndcg@{n}"],
+                "coverage": summary["coverage"],
+            }
+        )
 
         elapsed = time.time() - start_time
         remaining = elapsed / i * (len(configurations) - i)
 
         print(f"Recall@{n}: {score:.4f}")
 
-        print(
-            f"Configuration time: "
-            f"{time.time() - config_start:.2f} seconds"
-        )
+        print(f"Configuration time: {time.time() - config_start:.2f} seconds")
 
-        print(
-            f"Estimated remaining: "
-            f"{remaining / 60:.2f} minutes"
-        )
+        print(f"Estimated remaining: {remaining / 60:.2f} minutes")
 
     # Sort configurations by validation Recall@K
     results_df = (
@@ -124,9 +112,6 @@ def tune_item_knn(
     print("\nItem-KNN tuning completed.")
     print(f"Best parameters: {best_params}")
 
-    print(
-        f"Best validation Recall@{n}: "
-        f"{best[f'recall@{n}']:.4f}"
-    )
+    print(f"Best validation Recall@{n}: {best[f'recall@{n}']:.4f}")
 
     return results_df, best_params
