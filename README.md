@@ -13,6 +13,20 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 ```
 
+> **Wrong Python version?** If `pip install -e .` fails with
+> `ERROR: Package 'rec-system' requires a different Python: 3.14.3 not in '<3.13,>=3.12'`,
+> your `.venv` was created with a different Python (often plain `python3`).
+> Check with `python --version` inside the venv. If Python 3.12 is not installed,
+> get it with `brew install python@3.12` or let [uv](https://docs.astral.sh/uv/) download it,
+> then recreate the venv:
+>
+> ```bash
+> deactivate
+> rm -rf .venv
+> uv venv --python 3.12.3 .venv   # or: python3.12 -m venv .venv
+> source .venv/bin/activate
+> ```
+
 Install the dependencies and the project:
 
 ```bash
