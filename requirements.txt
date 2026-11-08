@@ -16,3 +16,4 @@ python-dateutil==4.0.0
 ruff==0.17.3
 scipy==1.18.1
 tzdata==2026.6
+scikit-learn==1.8.0
