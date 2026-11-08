@@ -1,0 +1,4 @@
+case,precision@5,precision@5_reference,recall@5,recall@5_reference,ndcg@5,ndcg@5_reference
+slide 8 list A,0.4,0.4,1.0,1.0,0.6509209298071326,0.65
+slide 8 list B,0.4,0.4,1.0,1.0,1.0,1.0
+slide 8 list C,0.4,0.4,1.0,1.0,0.5012658353418871,0.5
