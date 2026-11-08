@@ -4,6 +4,8 @@ import argparse
 from pathlib import Path
 
 from rec_system.eda import run_eda
+from rec_system.data import load_ratings
+from rec_system.split import split_ratings
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -17,6 +19,9 @@ def main() -> None:
 
     run_eda(args.data_dir, REPO_ROOT / "results", REPO_ROOT / "reports" / "figures")
 
+    # Load and split data
+    ratings = load_ratings(args.data_dir)
+    train, validation, test = split_ratings(ratings)
 
 if __name__ == "__main__":
     main()
