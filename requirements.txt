@@ -17,3 +17,4 @@ ruff==0.17.3
 scipy==1.18.1
 tzdata==2026.6
 scikit-learn==1.8.0
+implicit==0.7.3
