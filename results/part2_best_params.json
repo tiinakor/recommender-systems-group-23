@@ -1,0 +1,18 @@
+{
+  "item_knn": {
+    "metric": "cosine",
+    "k": 20,
+    "aggregation": "sum"
+  },
+  "bpr": {
+    "k": 64,
+    "learning_rate": 0.01,
+    "reg": 0.05,
+    "epochs": 40
+  },
+  "als": {
+    "factors": 16,
+    "regularization": 200.0,
+    "alpha": 5.0
+  }
+}
