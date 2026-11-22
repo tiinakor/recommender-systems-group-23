@@ -1,7 +1,12 @@
-"""Tune every model with the same budget on validation, then measure seed variability."""
+"""Tune every model with the same budget on validation, then measure seed variability.
+
+Lecture 3.1, slide 10: tune on validation only, give every model the same budget,
+report variability over several seeds, and compare models with a paired test
+across users.
+"""
 
 import random
-from itertools import product
+from itertools import combinations, product
 
 import numpy as np
 import pandas as pd
@@ -91,18 +96,26 @@ def seed_runs(
     held_out: pd.DataFrame,
     n_catalogue_items: int,
     seeds: tuple[int, ...] = SEEDS,
-) -> pd.DataFrame:
-    """Refit with each seed and evaluate; deterministic models are run once."""
-    rows = []
+    metric: str = "ndcg@10",
+) -> tuple[pd.DataFrame, pd.Series]:
+    """Refit with each seed and evaluate; deterministic models are run once.
+
+    Returns one summary row per seed, and each user's `metric` averaged over the
+    seeds (indexed by user_id) for the paired test.
+    """
+    rows, per_user_runs = [], []
     for seed in seeds if spec.uses_seed else (None,):
         fit_params = {**params, "seed": seed} if spec.uses_seed else params
-        summary, _ = score_model(
+        summary, per_user = score_model(
             spec, fit_params, train_matrix, held_out, n_catalogue_items
         )
         rows.append(
             {"model": spec.name, "seed": seed, **{m: summary[m] for m in METRICS}}
         )
-    return pd.DataFrame(rows)
+        per_user_runs.append(per_user.set_index("user_id")[metric])
+
+    per_user_mean = pd.concat(per_user_runs, axis=1).mean(axis=1).rename(spec.name)
+    return pd.DataFrame(rows), per_user_mean
 
 
 def mean_ci(values, confidence: float = 0.95) -> tuple[float, float, float]:
@@ -125,3 +138,44 @@ def summarise_seeds(runs: pd.DataFrame, metric: str = "ndcg@10") -> dict:
         f"{metric}_ci_high": high,
         "n_seeds": len(runs),
     }
+
+
+def holm(p_values: list[float]) -> list[float]:
+    """Holm-Bonferroni adjusted p-values (controls the family-wise error rate)."""
+    order = np.argsort(p_values)
+    m = len(p_values)
+    adjusted = np.empty(m)
+    running_max = 0.0
+    for rank, i in enumerate(order):
+        running_max = max(running_max, (m - rank) * p_values[i])
+        adjusted[i] = min(1.0, running_max)
+    return adjusted.tolist()
+
+
+def paired_tests(
+    per_user: dict[str, pd.Series], metric: str = "ndcg@10"
+) -> pd.DataFrame:
+    """Wilcoxon signed-rank test on per-user scores for every pair of models."""
+    rows = []
+    for a, b in combinations(per_user, 2):
+        pair = pd.concat([per_user[a], per_user[b]], axis=1, join="inner")
+        diff = pair[a] - pair[b]
+        result = stats.wilcoxon(pair[a], pair[b])
+        rows.append(
+            {
+                "model_a": a,
+                "model_b": b,
+                f"{metric}_a": pair[a].mean(),
+                f"{metric}_b": pair[b].mean(),
+                "mean_difference": diff.mean(),
+                "a_better": int((diff > 0).sum()),
+                "b_better": int((diff < 0).sum()),
+                "ties": int((diff == 0).sum()),
+                "n_users": len(pair),
+                "wilcoxon_statistic": float(result.statistic),
+                "p_value": float(result.pvalue),
+            }
+        )
+    table = pd.DataFrame(rows)
+    table["p_value_holm"] = holm(table["p_value"].tolist())
+    return table

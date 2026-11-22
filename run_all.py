@@ -16,7 +16,12 @@ from rec_system.models.baseline import item_knn, most_popular
 from rec_system.models.registry import MODELS
 from rec_system.split import split_ratings
 from rec_system.tuning.hyperparameter_optimization import tune_item_knn
-from rec_system.tuning.tune import seed_runs, summarise_seeds, tune_model
+from rec_system.tuning.tune import (
+    paired_tests,
+    seed_runs,
+    summarise_seeds,
+    tune_model,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent
 SUMMARY_COLUMNS = [
@@ -63,7 +68,7 @@ def run_part2(train, validation, test, n_catalogue_items, results_dir):
         pd.concat([train, validation], ignore_index=True)
     )
 
-    best_params, seed_tables, summaries = {}, [], []
+    best_params, seed_tables, summaries, per_user = {}, [], [], {}
     for name in PART2_MODELS:
         spec = MODELS[name]
         tuning, best_params[name] = tune_model(
@@ -71,7 +76,9 @@ def run_part2(train, validation, test, n_catalogue_items, results_dir):
         )
         tuning.to_csv(results_dir / f"part2_tuning_{name}.csv", index=False)
 
-        runs = seed_runs(spec, best_params[name], final_matrix, test, n_catalogue_items)
+        runs, per_user[name] = seed_runs(
+            spec, best_params[name], final_matrix, test, n_catalogue_items
+        )
         seed_tables.append(runs)
         summaries.append(summarise_seeds(runs))
 
@@ -84,6 +91,11 @@ def run_part2(train, validation, test, n_catalogue_items, results_dir):
 
     print("\nPart 2 test results (mean and 95% CI over seeds):")
     print(summary.round(4).to_string(index=False))
+
+    tests = paired_tests(per_user)
+    tests.to_csv(results_dir / "part2_paired_tests.csv", index=False)
+    print("\nPaired Wilcoxon tests on per-user NDCG@10 (Holm-adjusted p-values):")
+    print(tests.round(4).to_string(index=False))
 
 
 def main() -> None:
