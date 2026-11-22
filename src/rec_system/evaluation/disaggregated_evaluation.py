@@ -1,13 +1,29 @@
-"""Disaggregated evaluation across user and item groups."""
+"""Disaggregated evaluation across user and item groups.
+
+Groups are defined on the final training data (train + validation), the data
+the evaluated models were trained on:
+
+- User activity: Low = at most the median number of ratings, High = above the
+  80th percentile. Users in between belong to neither group.
+- Item popularity: Popular = at least the 80th percentile of ratings per movie,
+  Long-tail = everything else, including movies with no training ratings.
+
+For user groups the metrics are averaged over the group's users. For item
+groups the top-10 lists stay the same, but only test positives on that group's
+movies count as relevant; users with no such positive are left out. Coverage is
+the share of the catalogue (user groups) or of the group's movies (item groups)
+recommended to at least one user. Seeded models are averaged over their seeds.
+"""
 
 import pandas as pd
-from rec_system.metrics import evaluate
 
+from rec_system.metrics import DEFAULT_THRESHOLD, evaluate
 
 METRICS = ["precision@10", "recall@10", "ndcg@10"]
 
 
 # Users
+
 
 def describe_user_activity(train):
     """Printout to identify quantiles for low- and high-activity users."""
@@ -16,29 +32,34 @@ def describe_user_activity(train):
     print("\nUser activity statistics:")
     print(
         user_activity.describe(
-            percentiles=[0.01, 0.05, 0.10, 0.25, 0.50,
-                         0.75, 0.90, 0.95, 0.99]
-        ).round(2).to_frame().T.to_string(index=False)
+            percentiles=[0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99]
+        )
+        .round(2)
+        .to_frame()
+        .T.to_string(index=False)
     )
 
 
 def create_user_groups(train):
-    """Identify low- and high-activity users."""
-
+    """Identify low- and high-activity users, with a readable definition per group."""
     activity = train.groupby("user_id").size()
 
     low_threshold = activity.quantile(0.50)
     high_threshold = activity.quantile(0.80)
 
     groups = pd.Series(index=activity.index, dtype="object")
-
     groups[activity <= low_threshold] = "Low"
     groups[activity > high_threshold] = "High"
 
-    return groups
+    definitions = {
+        "Low": f"<= {low_threshold:.0f} training ratings (median)",
+        "High": f"> {high_threshold:.0f} training ratings (80th percentile)",
+    }
+    return groups, definitions
 
 
-## Items
+# Items
+
 
 def describe_item_interactions(train):
     interactions = train.groupby("item_id").size()
@@ -46,8 +67,7 @@ def describe_item_interactions(train):
     print("\nItem interactions statistics:")
     print(
         interactions.describe(
-            percentiles=[0.10, 0.20, 0.25, 0.50,
-                        0.75, 0.80, 0.90, 0.95, 0.99]
+            percentiles=[0.10, 0.20, 0.25, 0.50, 0.75, 0.80, 0.90, 0.95, 0.99]
         )
     )
 
@@ -55,202 +75,124 @@ def describe_item_interactions(train):
     print(interactions.value_counts().sort_index().head(20))
 
 
+def create_item_groups(train, catalogue):
+    """Popular vs long-tail movies; movies nobody rated in training are long-tail."""
+    interactions = train.groupby("item_id").size().reindex(catalogue, fill_value=0)
+    popularity_threshold = train.groupby("item_id").size().quantile(0.80)
+
+    groups = pd.Series("Long-tail", index=interactions.index, dtype="object")
+    groups[interactions >= popularity_threshold] = "Popular"
+
+    definitions = {
+        "Popular": f">= {popularity_threshold:.0f} training ratings (80th percentile)",
+        "Long-tail": f"< {popularity_threshold:.0f} training ratings",
+    }
+    return groups, definitions
 
 
-def create_item_groups(train):
-    """Identify item interaction and popularity groups."""
+# Evaluate one segment
 
-    interactions = train.groupby("item_id").size()
-
-    # Few vs Many
-    low_interaction_threshold = interactions.quantile(0.40)
-    high_interaction_threshold = interactions.quantile(0.80)
-
-    interaction_groups = pd.Series(index=interactions.index, dtype="object")
-    interaction_groups[ interactions <= low_interaction_threshold] = "Few"
-    interaction_groups[interactions >= high_interaction_threshold] = "Many"
-
-    # Popular vs Long-tail: 80th percentile
-    popularity_threshold = interactions.quantile(0.80)
-
-    popularity_groups = pd.Series(
-        index=interactions.index,
-        dtype="object",
-    )
-
-    popularity_groups[
-        interactions >= popularity_threshold
-    ] = "Popular"
-
-    popularity_groups[
-        interactions < popularity_threshold
-    ] = "Long-tail"
-
-    return interaction_groups, popularity_groups
-
-
-
-# --------------------------------------------------
-# EVALUATE ONE SEGMENT
-# --------------------------------------------------
 
 def evaluate_segment(
     recommendations,
     held_out,
     n_catalogue_items,
     k=10,
-    threshold=4,
-    debug=False,
+    threshold=DEFAULT_THRESHOLD,
 ):
     """Evaluate recommendations for a particular test segment."""
-
-    segment_users = held_out["user_id"].unique()
-
     segment_recommendations = {
         user_id: recommendations.get(user_id, [])
-        for user_id in segment_users
+        for user_id in held_out["user_id"].unique()
     }
-
-    summary, per_user = evaluate(
+    summary, _ = evaluate(
         recommendations=segment_recommendations,
         held_out=held_out,
         n_catalogue_items=n_catalogue_items,
         k=k,
         threshold=threshold,
     )
-
-    if debug:
-        relevant = held_out[held_out["rating"] >= threshold]
-
-        recommended_items = {
-            item
-            for recs in segment_recommendations.values()
-            for item in recs[:k]
-        }
-
-        relevant_items_set = set(relevant["item_id"])
-
-        print("\n--- SEGMENT DEBUG ---")
-        print("Test interactions:", len(held_out))
-        print("Positive interactions:", len(relevant))
-        print("Users evaluated:", len(per_user))
-        print("Unique relevant items:", len(relevant_items_set))
-        print("Unique recommended items:", len(recommended_items))
-        print(
-            "Relevant items appearing in recommendations:",
-            len(relevant_items_set & recommended_items),
-        )
-
-    return {
-        metric: summary[metric]
-        for metric in METRICS
-    }
+    return summary
 
 
-# --------------------------------------------------
-# MULTI-MODEL DISAGGREGATED EVALUATION
-# --------------------------------------------------
+# Multi-model disaggregated evaluation
+
 
 def evaluate_all_models_disaggregated(
-    model_results,
+    recommendations_by_model,
     train,
     test,
+    catalogue,
     n_catalogue_items,
     k=10,
-    threshold=4,
+    threshold=DEFAULT_THRESHOLD,
 ):
+    """Evaluate any number of models on every user and item segment.
+
+    `recommendations_by_model` maps a model name to {seed: {user_id: top-k list}}
+    (deterministic models have a single seed, None). Returns one row per model,
+    dimension and group, averaged over seeds.
     """
-    Evaluate any number of recommendation models.
+    user_groups, user_definitions = create_user_groups(train)
+    item_groups, item_definitions = create_item_groups(train, catalogue)
 
-    Expected input:
-
-    {
-        "Model 1": {
-            "recommendations": model_recommendations,
-        },
-        "Model 2": {
-            "recommendations": model_recommendations,
-        },
-    }
-    """
-
-    user_groups = create_user_groups(train)
-    interaction_groups, popularity_groups = create_item_groups(train)
-
-    # Define segments once for all models
-    segments = [
-        ("Overall", "All", None),
-        ("User activity", "Low", user_groups),
-        ("User activity", "High", user_groups),
-        ("Item interactions", "Few", interaction_groups),
-        ("Item interactions", "Many", interaction_groups),
-        ("Item popularity", "Popular", popularity_groups),
-        ("Item popularity", "Long-tail", popularity_groups),
-    ]
-
-    results = []
-
-    for model_name, model_data in model_results.items():
-
-        recommendations = model_data["recommendations"]
-
-        for dimension, segment, groups in segments:
-
-            if dimension == "Overall":
-                segment_test = test
-
-            elif dimension == "User activity":
-                segment_users = groups[groups == segment].index
-
-                segment_test = test[
-                    test["user_id"].isin(segment_users)
-                ]
-
-            else:
-                segment_items = groups[groups == segment].index
-
-                segment_test = test[
-                    test["item_id"].isin(segment_items)
-                ]
-
-            if segment_test.empty:
-                continue
-
-            metrics = evaluate_segment(
-                recommendations=recommendations,
-                held_out=segment_test,
-                n_catalogue_items=n_catalogue_items,
-                k=k,
-                threshold=threshold,
+    segments = []
+    for group, definition in user_definitions.items():
+        users = user_groups[user_groups == group].index
+        segments.append(
+            (
+                "User activity",
+                group,
+                definition,
+                test[test["user_id"].isin(users)],
+                None,
             )
+        )
+    for group, definition in item_definitions.items():
+        items = set(item_groups[item_groups == group].index)
+        segments.append(
+            (
+                "Item popularity",
+                group,
+                definition,
+                test[test["item_id"].isin(items)],
+                items,
+            )
+        )
 
-            for metric, value in metrics.items():
-                results.append({
-                    "evaluation_dimension": dimension,
-                    "segment": segment,
-                    "metric": metric,
-                    "model": model_name,
-                    "value": value,
-                })
+    rows = []
+    for model, recommendations_by_seed in recommendations_by_model.items():
+        for dimension, group, definition, segment_test, group_items in segments:
+            per_seed = []
+            for recommendations in recommendations_by_seed.values():
+                summary = evaluate_segment(
+                    recommendations, segment_test, n_catalogue_items, k, threshold
+                )
+                if group_items is not None:
+                    recommended = {
+                        i for recs in recommendations.values() for i in recs[:k]
+                    }
+                    summary["coverage"] = len(recommended & group_items) / len(
+                        group_items
+                    )
+                per_seed.append(summary)
 
-    return pd.DataFrame(results)
-
-
-# --------------------------------------------------
-# presentation table
-# --------------------------------------------------
-
-def create_presentation_table(results):
-
-    table = results.pivot(
-        index=["evaluation_dimension", "segment"],
-        columns=["model", "metric"],
-        values="value",
-    )
-
-    table.columns = [
-        f"{model}_{metric}"
-        for model, metric in table.columns
-    ]
-
-    return table.reset_index()
+            seeds = [s for s in recommendations_by_seed if s is not None]
+            rows.append(
+                {
+                    "model": model,
+                    "dimension": dimension,
+                    "group": group,
+                    "definition": definition,
+                    **{
+                        m: sum(s[m] for s in per_seed) / len(per_seed)
+                        for m in [*METRICS, "coverage"]
+                    },
+                    "n_users_evaluated": per_seed[0]["n_users_evaluated"],
+                    "n_items_in_group": len(group_items) if group_items else None,
+                    "seeds": ",".join(map(str, seeds))
+                    if seeds
+                    else "none (deterministic)",
+                }
+            )
+    return pd.DataFrame(rows)
