@@ -13,8 +13,10 @@ from rec_system.matrices import build_user_item_matrix
 from rec_system.metrics import relevant_items
 from rec_system.metrics_check import check_against_sklearn, check_slide_8
 from rec_system.models.baseline import item_knn, most_popular
+from rec_system.models.registry import MODELS
 from rec_system.split import split_ratings
 from rec_system.tuning.hyperparameter_optimization import tune_item_knn
+from rec_system.tuning.tune import seed_runs, summarise_seeds, tune_model
 
 REPO_ROOT = Path(__file__).resolve().parent
 SUMMARY_COLUMNS = [
@@ -49,6 +51,39 @@ def evaluate_most_popular_variants(
         )
         summaries.append(summary)
     return summaries
+
+
+PART2_MODELS = ("item_knn", "bpr", "als")
+
+
+def run_part2(train, validation, test, n_catalogue_items, results_dir):
+    """Tune each Part 2 model with the same budget, then score its best settings on test over seeds."""
+    train_matrix = build_user_item_matrix(train)
+    final_matrix = build_user_item_matrix(
+        pd.concat([train, validation], ignore_index=True)
+    )
+
+    best_params, seed_tables, summaries = {}, [], []
+    for name in PART2_MODELS:
+        spec = MODELS[name]
+        tuning, best_params[name] = tune_model(
+            spec, train_matrix, validation, n_catalogue_items
+        )
+        tuning.to_csv(results_dir / f"part2_tuning_{name}.csv", index=False)
+
+        runs = seed_runs(spec, best_params[name], final_matrix, test, n_catalogue_items)
+        seed_tables.append(runs)
+        summaries.append(summarise_seeds(runs))
+
+    (results_dir / "part2_best_params.json").write_text(
+        json.dumps(best_params, indent=2)
+    )
+    pd.concat(seed_tables).to_csv(results_dir / "part2_test_seed_runs.csv", index=False)
+    summary = pd.DataFrame(summaries)
+    summary.to_csv(results_dir / "part2_test_summary.csv", index=False)
+
+    print("\nPart 2 test results (mean and 95% CI over seeds):")
+    print(summary.round(4).to_string(index=False))
 
 
 def main() -> None:
@@ -128,6 +163,8 @@ def main() -> None:
         f"Metrics check against scikit-learn on {len(sklearn_check)} test users: "
         f"largest NDCG@10 difference {max_gap:.2e}"
     )
+
+    run_part2(train, validation, test, n_catalogue_items, results_dir)
 
 
 if __name__ == "__main__":
