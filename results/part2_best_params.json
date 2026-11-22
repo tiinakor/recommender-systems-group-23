@@ -4,6 +4,11 @@
     "k": 20,
     "aggregation": "sum"
   },
+  "user_knn": {
+    "metric": "pearson",
+    "k": 200,
+    "aggregation": "sum"
+  },
   "bpr": {
     "k": 64,
     "learning_rate": 0.01,
@@ -14,5 +19,10 @@
     "factors": 16,
     "regularization": 200.0,
     "alpha": 5.0
+  },
+  "content_based": {
+    "profile": "centred",
+    "year_weight": 0.25,
+    "year_bin": 10
   }
 }
