@@ -3,10 +3,12 @@
 import argparse
 import json
 from pathlib import Path
+import dataclasses
+import functools
 
 import pandas as pd
 
-from rec_system.data import load_ratings
+from rec_system.data import load_ratings, load_movies
 from rec_system.eda import run_eda
 from rec_system.evaluation.evaluate import evaluate_model, save_evaluation_results
 from rec_system.matrices import build_user_item_matrix
@@ -58,10 +60,10 @@ def evaluate_most_popular_variants(
     return summaries
 
 
-PART2_MODELS = ("item_knn", "bpr", "als")
+PART2_MODELS = ("item_knn", "bpr", "als", "user_knn", "content_based")
 
 
-def run_part2(train, validation, test, n_catalogue_items, results_dir):
+def run_part2(train, validation, test, movies, n_catalogue_items, results_dir):
     """Tune each Part 2 model with the same budget, then score its best settings on test over seeds."""
     train_matrix = build_user_item_matrix(train)
     final_matrix = build_user_item_matrix(
@@ -71,6 +73,8 @@ def run_part2(train, validation, test, n_catalogue_items, results_dir):
     best_params, seed_tables, summaries, per_user = {}, [], [], {}
     for name in PART2_MODELS:
         spec = MODELS[name]
+        if spec.needs_movies:
+            spec = dataclasses.replace(spec, fit=functools.partial(spec.fit, movies=movies))
         tuning, best_params[name] = tune_model(
             spec, train_matrix, validation, n_catalogue_items
         )
@@ -175,8 +179,9 @@ def main() -> None:
         f"Metrics check against scikit-learn on {len(sklearn_check)} test users: "
         f"largest NDCG@10 difference {max_gap:.2e}"
     )
+    movies = load_movies(args.data_dir)
+    run_part2(train, validation, test, movies, n_catalogue_items, results_dir)
 
-    run_part2(train, validation, test, n_catalogue_items, results_dir)
 
 
 if __name__ == "__main__":

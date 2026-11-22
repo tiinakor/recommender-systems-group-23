@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from rec_system.models import als, bpr
+from rec_system.models import als, bpr, content_based, user_knn
 from rec_system.models.baseline import item_knn
 
 
@@ -20,6 +20,7 @@ class ModelSpec:
     recommend: Callable
     search_space: dict[str, list]
     uses_seed: bool = False  # True if fit() takes a `seed` argument
+    needs_movies: bool = False
 
 
 MODELS = {
@@ -55,5 +56,26 @@ MODELS = {
             "alpha": [1.0, 5.0, 10.0, 40.0],
         },
         uses_seed=True,
+    ),
+        "user_knn": ModelSpec(
+        name="user_knn",
+        fit=user_knn.fit_user_knn,
+        recommend=user_knn.recommend,
+        search_space={
+            "metric": list(user_knn.SIMILARITIES),
+            "k": [10, 20, 50, 100, 200],
+            "aggregation": list(user_knn.AGGREGATIONS),
+        },
+    ),
+    "content_based": ModelSpec(
+        name="content_based",
+        fit=content_based.fit_content_based,
+        recommend=content_based.recommend,
+        search_space={
+            "profile": list(content_based.PROFILES),
+            "year_weight": [0.0, 0.25, 0.5, 1.0, 2.0],
+            "year_bin": [5, 10, 20],
+        },
+        needs_movies=True,
     ),
 }
