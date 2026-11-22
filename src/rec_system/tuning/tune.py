@@ -32,6 +32,17 @@ def sample_configs(
     return random.Random(seed).sample(grid, budget)
 
 
+def fit_and_recommend(
+    spec: ModelSpec, params: dict, train_matrix: pd.DataFrame, users, k: int = 10
+) -> dict[int, list[int]]:
+    """Fit one model on `train_matrix` and return a top-k list for each user."""
+    model_data = spec.fit(train_matrix, **params)
+    return {
+        user_id: spec.recommend(model_data, train_matrix, user_id, n=k)
+        for user_id in users
+    }
+
+
 def score_model(
     spec: ModelSpec,
     params: dict,
@@ -42,11 +53,9 @@ def score_model(
     threshold: float = DEFAULT_THRESHOLD,
 ) -> tuple[dict, pd.DataFrame]:
     """Fit one model on `train_matrix` and evaluate it on `held_out`."""
-    model_data = spec.fit(train_matrix, **params)
-    recommendations = {
-        user_id: spec.recommend(model_data, train_matrix, user_id, n=k)
-        for user_id in relevant_items(held_out, threshold)
-    }
+    recommendations = fit_and_recommend(
+        spec, params, train_matrix, relevant_items(held_out, threshold), k
+    )
     return evaluate(
         recommendations=recommendations,
         held_out=held_out,
@@ -97,25 +106,33 @@ def seed_runs(
     n_catalogue_items: int,
     seeds: tuple[int, ...] = SEEDS,
     metric: str = "ndcg@10",
-) -> tuple[pd.DataFrame, pd.Series]:
+    k: int = 10,
+) -> tuple[pd.DataFrame, pd.Series, dict]:
     """Refit with each seed and evaluate; deterministic models are run once.
 
-    Returns one summary row per seed, and each user's `metric` averaged over the
-    seeds (indexed by user_id) for the paired test.
+    Returns one summary row per seed, each user's `metric` averaged over the
+    seeds (indexed by user_id) for the paired test, and the top-k lists per seed
+    (used for the disaggregated evaluation).
     """
-    rows, per_user_runs = [], []
+    users = relevant_items(held_out, DEFAULT_THRESHOLD)
+    rows, per_user_runs, recommendations_by_seed = [], [], {}
     for seed in seeds if spec.uses_seed else (None,):
         fit_params = {**params, "seed": seed} if spec.uses_seed else params
-        summary, per_user = score_model(
-            spec, fit_params, train_matrix, held_out, n_catalogue_items
+        recommendations = fit_and_recommend(spec, fit_params, train_matrix, users, k)
+        summary, per_user = evaluate(
+            recommendations=recommendations,
+            held_out=held_out,
+            n_catalogue_items=n_catalogue_items,
+            k=k,
         )
         rows.append(
             {"model": spec.name, "seed": seed, **{m: summary[m] for m in METRICS}}
         )
         per_user_runs.append(per_user.set_index("user_id")[metric])
+        recommendations_by_seed[seed] = recommendations
 
     per_user_mean = pd.concat(per_user_runs, axis=1).mean(axis=1).rename(spec.name)
-    return pd.DataFrame(rows), per_user_mean
+    return pd.DataFrame(rows), per_user_mean, recommendations_by_seed
 
 
 def mean_ci(values, confidence: float = 0.95) -> tuple[float, float, float]:

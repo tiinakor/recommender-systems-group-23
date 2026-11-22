@@ -1,16 +1,20 @@
 """Reproduce every number and figure in the report."""
 
 import argparse
-import json
-from pathlib import Path
 import dataclasses
 import functools
+import json
+from pathlib import Path
 
 import pandas as pd
 
-from rec_system.data import load_ratings, load_movies
+from rec_system.data import load_movies, load_ratings
 from rec_system.eda import run_eda
+from rec_system.evaluation.disaggregated_evaluation import (
+    evaluate_all_models_disaggregated,
+)
 from rec_system.evaluation.evaluate import evaluate_model, save_evaluation_results
+from rec_system.evaluation.sparsity import sparsity_runs, summarise_sparsity
 from rec_system.matrices import build_user_item_matrix
 from rec_system.metrics import relevant_items
 from rec_system.metrics_check import check_against_sklearn, check_slide_8
@@ -70,17 +74,23 @@ def run_part2(train, validation, test, movies, n_catalogue_items, results_dir):
         pd.concat([train, validation], ignore_index=True)
     )
 
-    best_params, seed_tables, summaries, per_user = {}, [], [], {}
+    specs = {}
     for name in PART2_MODELS:
         spec = MODELS[name]
         if spec.needs_movies:
-            spec = dataclasses.replace(spec, fit=functools.partial(spec.fit, movies=movies))
+            spec = dataclasses.replace(
+                spec, fit=functools.partial(spec.fit, movies=movies)
+            )
+        specs[name] = spec
+
+    best_params, seed_tables, summaries, per_user, recommendations = {}, [], [], {}, {}
+    for name, spec in specs.items():
         tuning, best_params[name] = tune_model(
             spec, train_matrix, validation, n_catalogue_items
         )
         tuning.to_csv(results_dir / f"part2_tuning_{name}.csv", index=False)
 
-        runs, per_user[name] = seed_runs(
+        runs, per_user[name], recommendations[name] = seed_runs(
             spec, best_params[name], final_matrix, test, n_catalogue_items
         )
         seed_tables.append(runs)
@@ -100,6 +110,31 @@ def run_part2(train, validation, test, movies, n_catalogue_items, results_dir):
     tests.to_csv(results_dir / "part2_paired_tests.csv", index=False)
     print("\nPaired Wilcoxon tests on per-user NDCG@10 (Holm-adjusted p-values):")
     print(tests.round(4).to_string(index=False))
+
+    # Disaggregated results by user activity and item popularity (test set)
+    final_train = pd.concat([train, validation], ignore_index=True)
+    catalogue = pd.concat([final_train, test])["item_id"].unique()
+    disaggregated = evaluate_all_models_disaggregated(
+        recommendations, final_train, test, catalogue, n_catalogue_items
+    )
+    disaggregated.to_csv(results_dir / "part2_disaggregated.csv", index=False)
+    print("\nDisaggregated test results (mean over seeds):")
+    print(disaggregated.drop(columns=["definition"]).round(4).to_string(index=False))
+
+    # Sparsity ablation: same tuned settings, 50% and 20% of the training ratings
+    full_runs = pd.concat(seed_tables).assign(training_fraction=1.0)
+    sparse_runs = pd.concat(
+        [
+            sparsity_runs(spec, best_params[name], final_train, test, n_catalogue_items)
+            for name, spec in specs.items()
+        ]
+    )
+    all_runs = pd.concat([full_runs, sparse_runs], ignore_index=True)
+    all_runs.to_csv(results_dir / "part2_sparsity_runs.csv", index=False)
+    sparsity = summarise_sparsity(all_runs)
+    sparsity.to_csv(results_dir / "part2_sparsity_summary.csv", index=False)
+    print("\nSparsity ablation on test (mean and 95% CI over seeds):")
+    print(sparsity.round(4).to_string(index=False))
 
 
 def main() -> None:
@@ -181,7 +216,6 @@ def main() -> None:
     )
     movies = load_movies(args.data_dir)
     run_part2(train, validation, test, movies, n_catalogue_items, results_dir)
-
 
 
 if __name__ == "__main__":
