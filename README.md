@@ -1,9 +1,12 @@
 # recommender-systems-group-23
+
 Recommender System Project Group 23
 
 ## Project documents
 
 Shared Google Drive folder: https://drive.google.com/drive/folders/1Q-s6bFRjBlsptlyYvxPgAa1SzgYE3Exe?usp=sharing
+
+Recommder Systems Report: [tuni-my.sharepoint.com/:w:/g/personal/van_k_bui_tuni_fi/IQBxDlNHFBbPT6QVtbeD4hETAXveKB7rFAOelt0rNInt76Y?e=TbzH21](https://tuni-my.sharepoint.com/:w:/g/personal/van_k_bui_tuni_fi/IQBxDlNHFBbPT6QVtbeD4hETAXveKB7rFAOelt0rNInt76Y?e=TbzH21)
 
 ## Requirements
 
